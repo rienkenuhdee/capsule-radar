@@ -48,7 +48,10 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
     const int b2 = rest.indexOf('|');
     if (b2 < 0) return false;
     const uint32_t now = (uint32_t)time(nullptr);    // expire stale routes (reused callsigns)
-    if (now > 1700000000UL && ts > 1700000000UL && (now - ts) > 86400UL) return false;  // 24 h TTL
+    if (now > 1700000000UL && ts > 1700000000UL && (now - ts) > 7200UL) return false;  // 2 h TTL
+    // Was 24h: many carriers (esp. low-cost/charter) reuse the same callsign for
+    // different city pairs across a day, so a day-old cached route can point at a
+    // completely different flight than the one currently being tracked (GitHub #7).
     snprintf(from, fn, "%s", rest.substring(0, b2).c_str());
     snprintf(to, tn, "%s", rest.substring(b2 + 1).c_str());
     return true;
