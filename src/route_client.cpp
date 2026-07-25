@@ -12,6 +12,11 @@
 #include <time.h>   // route-cache TTL
 
 #define ROUTE_CACHE_MAX 200   // wrap the cache before it can crowd NVS
+#define EPOCH_SANE   1700000000UL  // any real epoch is past this; below it the clock is unset
+// The cache only needs to cover watching ONE flight cross the scope (minutes) —
+// tapping the same aircraft repeatedly shouldn't re-query. Beyond that it is pure
+// staleness risk, since the same callsign flies different city pairs the same day.
+#define ROUTE_TTL_S  1800UL        // 30 min (was 2 h, and 24 h before that)
 
 // strip spaces -> a valid NVS key (callsigns are <= 8 chars)
 static void route_key(const char *callsign, char *out, size_t on) {
@@ -53,12 +58,16 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
         if (pos < 0) return false;
         cut[i] = pos;
     }
-    const uint32_t ts = (uint32_t)v.substring(0, cut[0]).toInt();
-    const uint32_t now = (uint32_t)time(nullptr);    // expire stale routes (reused callsigns)
-    if (now > 1700000000UL && ts > 1700000000UL && (now - ts) > 7200UL) return false;  // 2 h TTL
-    // Was 24h: many carriers (esp. low-cost/charter) reuse the same callsign for
-    // different city pairs across a day, so a day-old cached route can point at a
-    // completely different flight than the one currently being tracked (GitHub #7).
+    // Expire stale routes: carriers reuse a callsign for different city pairs
+    // across a day, so serving an old entry shows the wrong flight (GitHub #7).
+    const uint32_t ts  = (uint32_t)v.substring(0, cut[0]).toInt();
+    const uint32_t now = (uint32_t)time(nullptr);
+    // An entry stamped before the clock synced carries seconds-since-boot, not an
+    // epoch, so its age is unknowable. Drop it: the old code skipped the TTL test
+    // in that case, which let such entries live FOREVER across reboots — the real
+    // reason stale routes kept reappearing.
+    if (ts < EPOCH_SANE) return false;
+    if (now > EPOCH_SANE && (now - ts) > ROUTE_TTL_S) return false;
     snprintf(from, fn, "%s", v.substring(cut[0] + 1, cut[1]).c_str());
     snprintf(to, tn, "%s", v.substring(cut[1] + 1, cut[2]).c_str());
     const String slat = v.substring(cut[2] + 1, cut[3]);
@@ -74,6 +83,8 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
 void route_cache_put(const char *callsign, const char *from, const char *to,
                      double destLat, double destLon, const char *airline) {
     if (!callsign || !callsign[0]) return;
+    const uint32_t now = (uint32_t)time(nullptr);
+    if (now < EPOCH_SANE) return;   // clock unset: an entry we can't age is worse than none
     char key[12];
     route_key(callsign, key, sizeof(key));
     if (!key[0]) return;
@@ -84,7 +95,7 @@ void route_cache_put(const char *callsign, const char *from, const char *to,
     char coords[32] = "|";               // "|lat|lon", empty fields when unknown
     if (!isnan(destLat) && !isnan(destLon))
         snprintf(coords, sizeof(coords), "%.4f|%.4f", destLat, destLon);
-    String v = String((uint32_t)time(nullptr)) + "|" + String(from ? from : "") + "|" +
+    String v = String(now) + "|" + String(from ? from : "") + "|" +
                String(to ? to : "") + "|" + coords + "|" + String(airline ? airline : "");
     if (p.putString(key, v) > 0) p.putInt("__n", n + 1);
     p.end();

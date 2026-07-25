@@ -271,12 +271,32 @@ static void adsb_task(void*) {
             if (route_pending(wantCall, sizeof(wantCall))) {
                 char from[40] = "", to[40] = "", airline[40] = "";
                 double dLat = NAN, dLon = NAN;
-                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon,
-                                    airline, sizeof(airline))) {
-                    // NVS hit, no network. Re-check against the aircraft's CURRENT state:
-                    // the suspect verdict is per-flight, never cached.
+                bool cached = route_cache_get(wantCall, from, sizeof(from), to, sizeof(to),
+                                              &dLat, &dLon, airline, sizeof(airline));
+                // A cached route that contradicts where the aircraft is actually heading is
+                // most likely the previous flight under this callsign. Don't just flag it —
+                // drop it and re-query, so the card self-corrects (GitHub #7).
+                bool recovered = false;
+                if (cached && route_looks_suspect(wantCall, dLat, dLon)) {
+                    char f2[40] = "", t2[40] = "", a2[40] = "";
+                    double lat2 = NAN, lon2 = NAN;
+                    if (route_fetch(wantCall, f2, sizeof(f2), t2, sizeof(t2), &lat2, &lon2,
+                                    a2, sizeof(a2))) {
+                        Serial.printf("[route] %s cache disagreed with track ('%s' -> '%s')\n",
+                                      wantCall, from, to);
+                        memcpy(from, f2, sizeof(from));  memcpy(to, t2, sizeof(to));
+                        memcpy(airline, a2, sizeof(airline));
+                        dLat = lat2; dLon = lon2;
+                        route_cache_put(wantCall, from, to, dLat, dLon, airline);
+                        recovered = true;
+                    }
+                }
+                if (cached) {
+                    // Re-check against the aircraft's CURRENT state: the suspect
+                    // verdict is per-flight, never cached.
                     route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon), airline);
-                    Serial.printf("[route] %s (cache): '%s' -> '%s' [%s]\n", wantCall, from, to, airline);
+                    Serial.printf("[route] %s (%s): '%s' -> '%s' [%s]\n", wantCall,
+                                  recovered ? "net, replaced cache" : "cache", from, to, airline);
                 } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon,
                                        airline, sizeof(airline))) {
                     route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon), airline);
