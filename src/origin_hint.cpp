@@ -22,6 +22,7 @@
 
 struct Entry {
     char     id[5] = {0};          // inferred departure airport ("" = none yet)
+    char     destId[5] = {0};      // inferred arrival airport ("" = none yet)
     bool     seenAirborne = false; // ever seen flying -> on ground later means it LANDED
     bool     seenCruise = false;   // ever seen in cruise -> low+climbing later is a go-around,
                                    // not a climb-out (don't tag the missed airport as origin)
@@ -54,6 +55,21 @@ void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs) {
                 (ac.altBaro > 8000.0f ||
                  (ac.altBaro > 3000.0f && !isnan(ac.baroRate) && fabsf(ac.baroRate) < HINT_MIN_FPM)))
                 e.seenCruise = true;
+        }
+
+        // A landing is unambiguous: we watched this aircraft fly and it is now on
+        // the ground, so the field beneath it is where it arrived. (Only the
+        // definite case — an aircraft merely descending nearby may be passing
+        // through, and guessing there would invent routes.)
+        if (ac.onGround && e.seenAirborne && !e.destId[0]) {
+            char id[5]; float dKm;
+            if (airports_nearest(ac.lat, ac.lon, HINT_GROUND_KM, 0, id, &dKm, nullptr) && id[0]) {
+                memcpy(e.destId, id, 5);
+#if defined(ARDUINO)
+                Serial.printf("[origin] %s landed at %s (%.1f km)\n",
+                              ac.hex.c_str(), id, (double)dKm);
+#endif
+            }
         }
 
         if (e.id[0]) continue;   // already hinted; first observation wins
@@ -98,12 +114,14 @@ void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs) {
     }
 }
 
-bool origin_hint_get(const char *hex, char id[5]) {
-    if (id) id[0] = 0;
+bool origin_hint_get(const char *hex, char fromId[5], char toId[5]) {
+    if (fromId) fromId[0] = 0;
+    if (toId)   toId[0] = 0;
     if (!hex || !hex[0]) return false;
     std::lock_guard<std::mutex> g(s_m);
     auto it = s_map.find(std::string(hex));
-    if (it == s_map.end() || !it->second.id[0]) return false;
-    memcpy(id, it->second.id, 5);
-    return true;
+    if (it == s_map.end()) return false;
+    if (fromId) memcpy(fromId, it->second.id, 5);
+    if (toId)   memcpy(toId, it->second.destId, 5);
+    return it->second.id[0] || it->second.destId[0];
 }

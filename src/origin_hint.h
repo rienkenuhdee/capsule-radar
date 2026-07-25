@@ -16,6 +16,8 @@
 // are on the ground / climbing out low get a (bbox-prefiltered) airport lookup.
 void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs);
 
-// Departure airport for this hex, if one was inferred. `id` is the short ident
-// (IATA, else local/ICAO code), up to 4 chars + NUL.
-bool origin_hint_get(const char *hex, char id[5]);
+// Locally-inferred departure and/or arrival for this hex. Each `id` is the short
+// ident (IATA, else local/ICAO code), up to 4 chars + NUL, or "" if not inferred.
+// Returns true if either is known. Watching an aircraft depart AND land locally
+// yields a complete route no database has.
+bool origin_hint_get(const char *hex, char fromId[5], char toId[5]);

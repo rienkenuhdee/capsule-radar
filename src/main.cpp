@@ -11,6 +11,8 @@
 #include "route.h"
 #include "route_client.h"
 #include "origin_hint.h"             // inferred departure airports for small craft
+#include "acinfo.h"                  // registration/model/owner fallback (GA has no route)
+#include "acinfo_client.h"
 #include "photo.h"
 #include "photo_client.h"
 #include "weather.h"
@@ -305,6 +307,25 @@ static void adsb_task(void*) {
                 } else {
                     route_store(wantCall, from, to);   // empty -> don't refetch this session
                     Serial.printf("[route] %s: no route\n", wantCall);
+                }
+            }
+            // Airframe identity, requested by the card when a flight has no route.
+            // hex -> airframe never changes, so a cache hit is always good.
+            char wantAc[10];
+            if (acinfo_pending(wantAc, sizeof(wantAc))) {
+                char reg[16] = "", model[32] = "", owner[40] = "";
+                if (acinfo_cache_get(wantAc, reg, sizeof(reg), model, sizeof(model),
+                                     owner, sizeof(owner))) {
+                    acinfo_store(wantAc, reg, model, owner);
+                    Serial.printf("[acinfo] %s (cache): %s '%s' [%s]\n", wantAc, reg, model, owner);
+                } else if (acinfo_fetch(wantAc, reg, sizeof(reg), model, sizeof(model),
+                                        owner, sizeof(owner))) {
+                    acinfo_store(wantAc, reg, model, owner);
+                    acinfo_cache_put(wantAc, reg, model, owner);
+                    Serial.printf("[acinfo] %s (net): %s '%s' [%s]\n", wantAc, reg, model, owner);
+                } else {
+                    acinfo_store(wantAc, "", "", "");   // mark done: don't refetch this session
+                    Serial.printf("[acinfo] %s: not in the database\n", wantAc);
                 }
             }
             char wantHex[10];
@@ -988,6 +1009,7 @@ void setup() {
 
     loadSettings();
     route_cache_begin();   // clear stale route cache if the label format changed
+    acinfo_cache_begin();
 
     // --- Display + LVGL (M0) ----------------------------------------------
     // CO5300 AMOLED over QSPI + LVGL draw buffers in PSRAM, then a hello screen.

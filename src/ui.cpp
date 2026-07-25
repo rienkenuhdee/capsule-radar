@@ -4,6 +4,7 @@
 #include "radar_view.h"
 #include "route.h"
 #include "origin_hint.h"   // inferred departure fallback for the detail card
+#include "acinfo.h"        // registration/model/owner when there is no route at all
 #include "photo.h"
 #include "weather.h"
 #include "wx_radar.h"
@@ -180,36 +181,58 @@ static void refresh_card(void) {
         snprintf(s_lastRouteReq, sizeof(s_lastRouteReq), "%s", in.call);
         route_request(in.call);
     }
-    char rfrom[40], rto[40], rairline[40] = "", hintIata[5];
-    // locally-inferred departure (seen on ground / climbing out near an airport):
-    // the fallback when adsbdb has nothing, which is the norm for small craft
-    const bool hint = origin_hint_get(in.hex, hintIata);
+    char rfrom[40], rto[40], rairline[40] = "", hintFrom[5], hintTo[5];
+    // Locally-inferred departure/arrival (watched it leave or land near a field):
+    // the fallback when adsbdb has nothing, which is the norm for small craft.
+    origin_hint_get(in.hex, hintFrom, hintTo);
     // The route-vs-track suspect check (GitHub #7) still runs and logs to serial,
     // but is deliberately not surfaced on the card: the marker was dropped by
     // preference, not because the check misfires. Re-render `suspect` here to
     // bring it back.
-    if (!in.call[0]) {
-        if (hint) { char rt[24]; snprintf(rt, sizeof(rt), "From %s", hintIata);
-                    lv_label_set_text(s_cardRoute, rt); }
-        else        lv_label_set_text(s_cardRoute, "Route -");     // no callsign -> nothing to look up
-    } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto), nullptr,
-                         rairline, sizeof(rairline))) {
-        char rt[96];
-        if (rfrom[0] && rto[0]) snprintf(rt, sizeof(rt), "%s -> %s", rfrom, rto);
-        else if (rfrom[0])      snprintf(rt, sizeof(rt), "From %s", rfrom);   // partial route:
-        else if (rto[0])        snprintf(rt, sizeof(rt), "To %s", rto);       // show what's known
-        else if (hint)          snprintf(rt, sizeof(rt), "From %s", hintIata);
-        else                    snprintf(rt, sizeof(rt), "Route unavailable");
-        fold_ascii(rt);
-        lv_label_set_text(s_cardRoute, rt);
-    } else {
-        lv_label_set_text(s_cardRoute, "Looking up route...");     // pending: lookup in flight
+    rfrom[0] = rto[0] = 0;
+    // With no callsign there is nothing to look up, so treat the route as already
+    // resolved (to nothing) and go straight to the fallbacks below.
+    const bool routeKnown = !in.call[0] ||
+                            route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto),
+                                      nullptr, rairline, sizeof(rairline));
+    const bool haveRoute = routeKnown && (rfrom[0] || rto[0]);
+
+    // No route at all — the normal case for GA, since routes are airline schedule
+    // data keyed on callsign. Fall back to the airframe record, which adsbdb does
+    // hold for light aircraft (registration, plain-English model, owner).
+    char areg[16] = "", amodel[32] = "", aowner[40] = "";
+    bool haveAc = false;
+    if (routeKnown && !haveRoute && in.hex[0]) {
+        acinfo_request(in.hex);
+        haveAc = acinfo_get(in.hex, areg, sizeof(areg), amodel, sizeof(amodel),
+                            aowner, sizeof(aowner));
     }
-    // Operator sits above the route when known; otherwise the route takes its slot
-    // so GA aircraft (no airline) don't get a blank line.
-    if (rairline[0]) {
-        fold_ascii(rairline);
-        lv_label_set_text(s_cardAirline, rairline);
+
+    char rt[96];
+    if (!routeKnown)             snprintf(rt, sizeof(rt), "Looking up route...");
+    else if (rfrom[0] && rto[0]) snprintf(rt, sizeof(rt), "%s -> %s", rfrom, rto);
+    else if (rfrom[0])           snprintf(rt, sizeof(rt), "From %s", rfrom);  // partial route:
+    else if (rto[0])             snprintf(rt, sizeof(rt), "To %s", rto);      // show what's known
+    // observed locally: a departure and a landing gives a route no database has
+    else if (hintFrom[0] && hintTo[0]) snprintf(rt, sizeof(rt), "%s -> %s", hintFrom, hintTo);
+    else if (hintFrom[0])        snprintf(rt, sizeof(rt), "From %s", hintFrom);
+    else if (hintTo[0])          snprintf(rt, sizeof(rt), "To %s", hintTo);
+    else if (areg[0] && amodel[0]) snprintf(rt, sizeof(rt), "%s  %s", areg, amodel);
+    else if (amodel[0])          snprintf(rt, sizeof(rt), "%s", amodel);
+    else if (areg[0])            snprintf(rt, sizeof(rt), "%s", areg);
+    else                         snprintf(rt, sizeof(rt), "Route unavailable");
+    fold_ascii(rt);
+    lv_label_set_text(s_cardRoute, rt);
+
+    // Upper line answers "who operates this?": the airline for scheduled flights,
+    // the registered owner for everything else. Hidden when neither is known, and
+    // the route line slides up so the card doesn't show a blank gap.
+    char upper[40] = "";
+    if (rairline[0])      snprintf(upper, sizeof(upper), "%s", rairline);
+    else if (haveAc)      snprintf(upper, sizeof(upper), "%s", aowner);
+    if (upper[0]) {
+        fold_ascii(upper);
+        lv_label_set_text(s_cardAirline, upper);
         lv_obj_clear_flag(s_cardAirline, LV_OBJ_FLAG_HIDDEN);
         lv_obj_align(s_cardRoute, LV_ALIGN_TOP_LEFT, 0, CARD_ROUTE_Y() + CARD_LINE_H());
     } else {
