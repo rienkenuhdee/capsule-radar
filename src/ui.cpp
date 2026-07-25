@@ -3,6 +3,7 @@
 #include "ui.h"
 #include "radar_view.h"
 #include "route.h"
+#include "origin_hint.h"   // inferred departure fallback for the detail card
 #include "photo.h"
 #include "weather.h"
 #include "wx_radar.h"
@@ -173,16 +174,22 @@ static void refresh_card(void) {
         snprintf(s_lastRouteReq, sizeof(s_lastRouteReq), "%s", in.call);
         route_request(in.call);
     }
-    char rfrom[40], rto[40];
+    char rfrom[40], rto[40], hintIata[4];
     bool rsus = false;
+    // locally-inferred departure (seen on ground / climbing out near an airport):
+    // the fallback when adsbdb has nothing, which is the norm for small craft
+    const bool hint = origin_hint_get(in.hex, hintIata);
     lv_obj_set_style_text_color(s_cardRoute, UI_GREEN, 0);         // default; overridden below
     if (!in.call[0]) {
-        lv_label_set_text(s_cardRoute, "Route -");                 // no callsign -> nothing to look up
+        if (hint) { char rt[24]; snprintf(rt, sizeof(rt), "From %s", hintIata);
+                    lv_label_set_text(s_cardRoute, rt); }
+        else        lv_label_set_text(s_cardRoute, "Route -");     // no callsign -> nothing to look up
     } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto), &rsus)) {
         char rt[96];
         if (rfrom[0] && rto[0]) snprintf(rt, sizeof(rt), "%s -> %s%s", rfrom, rto, rsus ? " ?" : "");
         else if (rfrom[0])      snprintf(rt, sizeof(rt), "From %s", rfrom);   // partial route:
         else if (rto[0])        snprintf(rt, sizeof(rt), "To %s", rto);       // show what's known
+        else if (hint)          snprintf(rt, sizeof(rt), "From %s", hintIata);
         else                    snprintf(rt, sizeof(rt), "Route unavailable");
         if (rsus)               // claimed destination disagrees with the observed track (#7):
             lv_obj_set_style_text_color(s_cardRoute, UI_DIM, 0);   // show it, but not as fact

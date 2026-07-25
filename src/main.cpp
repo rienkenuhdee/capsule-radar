@@ -10,6 +10,7 @@
 #include "snapshot_gate.h"
 #include "route.h"
 #include "route_client.h"
+#include "origin_hint.h"             // inferred departure airports for small craft
 #include "photo.h"
 #include "photo_client.h"
 #include "weather.h"
@@ -201,6 +202,9 @@ static void adsb_task(void*) {
                     const uint32_t receivedMs = millis();
                     lastFeedOk = receivedMs;
                     g_lastFeedOkMs = receivedMs;      // HUD: mark data as fresh
+                    // infer departure airports before `fresh` is swapped away (small
+                    // craft usually have no adsbdb route; the card falls back to this)
+                    origin_hint_update(fresh, receivedMs);
 
                     const bool publish = snapshotGate.shouldPublish(
                         !fresh.empty(), receivedMs, AC_STALE_MS);

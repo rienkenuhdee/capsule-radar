@@ -74,10 +74,18 @@ bool airports_nearest_iata(double lat, double lon, float maxKm,
     if (iata) iata[0] = 0;
     double best = maxKm;
     int bestIdx = -1;
+    // cheap bbox reject before the trig-heavy haversine — lets callers scan every
+    // poll (origin hints) without burning the feed task's budget on 4.5k airports
+    const double latMargin = maxKm / 111.0;
+    const double cosLat    = cos(lat * M_PI / 180.0);
+    const double lonMargin = latMargin / (cosLat < 0.15 ? 0.15 : cosLat);
     for (int i = 0; i < AIRPORT_NUM; ++i) {
         if (!AIRPORT_IATA[i][0]) continue;
         const double alat = AIRPORT_LAT[i] / (double)AIRPORT_SCALE;
         const double alon = AIRPORT_LON[i] / (double)AIRPORT_SCALE;
+        const double dlon = fabs(alon - lon);
+        if (fabs(alat - lat) > latMargin) continue;
+        if (dlon > lonMargin && fabs(dlon - 360.0) > lonMargin) continue;   // antimeridian wrap
         const double d = geo::haversineKm(lat, lon, alat, alon);
         if (d < best) { best = d; bestIdx = i; }
     }
