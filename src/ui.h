@@ -15,3 +15,5 @@ void ui_set_range_km(float km);              // update the zoom button label / s
 void ui_set_units(int preset);               // 0 = Aviation (ft,kt,km) · 1 = Metric (m,km/h,km) · 2 = Imperial (ft,mph,mi)
 void ui_set_large_text(bool on);             // accessibility: bigger fonts everywhere. Call BEFORE ui_create()
 void ui_set_weather_forecast(bool forecast); // false = WX radar, true = 3-day forecast
+void ui_set_mute_cb(void (*cb)(bool muted)); // HUD mute button -> notify main (persist + apply)
+void ui_set_muted(bool muted);               // reflect mute state set elsewhere (boot, web page)

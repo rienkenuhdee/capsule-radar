@@ -30,6 +30,9 @@ static lv_obj_t *s_cardRoute = nullptr, *s_cardAirline = nullptr;
 static lv_obj_t *s_photo = nullptr, *s_photoCredit = nullptr;   // aircraft photo above the card
 static char s_lastRouteReq[12] = "";
 static lv_obj_t *s_hudWifi = nullptr, *s_hudCount = nullptr, *s_hudClock = nullptr, *s_hudBatt = nullptr, *s_hudDate = nullptr;
+static lv_obj_t *s_hudMute = nullptr;    // tap to mute/unmute alert pings
+static bool s_muted = false;
+static void (*s_muteCb)(bool) = nullptr;
 static lv_obj_t *s_hudBars[4] = { nullptr, nullptr, nullptr, nullptr };   // WiFi signal-strength bars
 static lv_obj_t *s_list = nullptr;
 static lv_obj_t *s_statsLbl = nullptr;
@@ -278,6 +281,28 @@ void ui_set_range_km(float km) {
     const int n = (int)(sizeof(RANGE_STEPS_KM) / sizeof(RANGE_STEPS_KM[0]));
     for (int i = 0; i < n; ++i) { float d = km - RANGE_STEPS_KM[i]; if (d < 0) d = -d; if (d < bd) { bd = d; best = i; } }
     s_rangeIdx = best;
+}
+
+// --- mute toggle (HUD) ---
+static void mute_paint(void) {
+    if (!s_hudMute) return;
+    lv_label_set_text(s_hudMute, s_muted ? LV_SYMBOL_MUTE : LV_SYMBOL_VOLUME_MAX);
+    lv_obj_set_style_text_color(s_hudMute, s_muted ? UI_DIM : UI_INK, 0);
+}
+
+void ui_set_mute_cb(void (*cb)(bool)) { s_muteCb = cb; }
+
+void ui_set_muted(bool muted) { s_muted = muted; mute_paint(); }
+
+static void mute_clicked_cb(lv_event_t *e) {   // PRESSED, like the zoom button
+    (void)e;
+    static uint32_t last = 0;
+    const uint32_t now = lv_tick_get();
+    if (now - last < 250) return;              // debounce repeated/held presses
+    last = now;
+    s_muted = !s_muted;
+    mute_paint();
+    if (s_muteCb) s_muteCb(s_muted);           // main persists it and applies to the codec
 }
 
 static void radar_press_cb(lv_event_t *e) { (void)e; s_longPressed = false; }
@@ -812,6 +837,17 @@ void ui_create(void) {
         lv_obj_set_style_bg_opa(s_hudBars[i], LV_OPA_COVER, 0);
         lv_obj_clear_flag(s_hudBars[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
+
+    // Mute toggle, leftmost in the HUD row. A plain symbol keeps it visually part of
+    // the HUD; the enlarged click area makes it a comfortable target anyway.
+    s_hudMute = lv_label_create(s_tileRadar);
+    lv_obj_set_style_text_font(s_hudMute, F14(), 0);
+    lv_obj_align(s_hudMute, LV_ALIGN_TOP_MID, -95, 50);
+    lv_obj_add_flag(s_hudMute, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_hudMute, 16);
+    lv_obj_clear_flag(s_hudMute, LV_OBJ_FLAG_SCROLL_CHAIN);   // tapping must not swipe the tileview
+    lv_obj_add_event_cb(s_hudMute, mute_clicked_cb, LV_EVENT_PRESSED, NULL);
+    mute_paint();
 
     s_hudGps = lv_label_create(s_tileRadar);     // GPS satellite icon (between WiFi bars and count)
     lv_obj_set_style_text_font(s_hudGps, F14(), 0);

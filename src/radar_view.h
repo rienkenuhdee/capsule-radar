@@ -8,7 +8,6 @@ struct RadarSettings {
     double homeLat, homeLon;
     float  rangeKm;
     double rotationDeg = 0.0;   // 0 = north-up
-    bool   mute = false;
 };
 
 // Selectable visual skins.

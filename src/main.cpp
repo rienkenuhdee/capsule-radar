@@ -399,6 +399,18 @@ static void onRangeChange(float km) {
     ui_on_data_updated();
 }
 
+// HUD mute button: apply to the codec and persist, so the setting survives a
+// reboot and the web page's "Mute alerts" checkbox agrees with the device.
+static void onMuteChange(bool muted) {
+    g_muted = muted;
+    audio_set_muted(g_muted);
+    Preferences p;
+    p.begin("capsuleradar", false);
+    p.putBool("mute", g_muted);
+    p.end();
+    Serial.printf("[audio] alerts %s from the HUD\n", g_muted ? "muted" : "unmuted");
+}
+
 // Persist the visual theme in NVS (called when the user long-presses to switch).
 static void saveTheme(int t) {
     Preferences p;
@@ -716,7 +728,11 @@ static void handleBright() {
 
 static void handleVol() {
     if (g_web.hasArg("v"))    { g_volume = constrain((int)g_web.arg("v").toInt(), 0, 100); audio_set_volume(g_volume); }
-    if (g_web.hasArg("mute")) { g_muted = g_web.arg("mute").toInt() != 0; audio_set_muted(g_muted); }
+    if (g_web.hasArg("mute")) {
+        g_muted = g_web.arg("mute").toInt() != 0;
+        audio_set_muted(g_muted);
+        ui_set_muted(g_muted);        // keep the HUD icon in step with the web page
+    }
     if (g_web.hasArg("save")) {
         Preferences p;
         p.begin("capsuleradar", false);
@@ -1009,6 +1025,8 @@ void setup() {
     }
     radar::setThemeChangedCb(saveTheme);
     ui_set_range_cb(onRangeChange);              // on-screen zoom button
+    ui_set_mute_cb(onMuteChange);                // HUD mute button
+    ui_set_muted(g_muted);                       // show the saved mute state
     ui_set_units(g_units);                       // apply saved unit preset
     ui_set_range_km(g_settings.rangeKm);         // show the loaded range
 
