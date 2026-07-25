@@ -5,7 +5,7 @@
 #include <math.h>
 #include <string.h>
 
-struct Apt { lv_point_t pos; char iata[4]; uint8_t large; };
+struct Apt { lv_point_t pos; char id[5]; uint8_t large; };
 static std::vector<Apt> s_apts;
 
 void airports_project(double homeLat, double homeLon, double rangeKm,
@@ -19,6 +19,7 @@ void airports_project(double homeLat, double homeLon, double rangeKm,
     const double lonMargin = latMargin / (cosLat < 0.15 ? 0.15 : cosLat);
 
     for (int i = 0; i < AIRPORT_NUM; ++i) {
+        if (AIRPORT_CLASS[i] == 0) continue;                                // small strips: never drawn
         const double lat = AIRPORT_LAT[i] / (double)AIRPORT_SCALE;
         const double lon = AIRPORT_LON[i] / (double)AIRPORT_SCALE;
         const double dlon = lon - homeLon;
@@ -32,8 +33,8 @@ void airports_project(double homeLat, double homeLon, double rangeKm,
         Apt ap;
         ap.pos.x = (lv_coord_t)lroundf((float)(cx + rPx * sin(a)));
         ap.pos.y = (lv_coord_t)lroundf((float)(cy - rPx * cos(a)));
-        memcpy(ap.iata, AIRPORT_IATA[i], 4);
-        ap.large = AIRPORT_LARGE[i];
+        memcpy(ap.id, AIRPORT_ID[i], 5);
+        ap.large = (AIRPORT_CLASS[i] == 2);
         s_apts.push_back(ap);
     }
 }
@@ -56,10 +57,10 @@ void airports_draw(lv_draw_ctx_t *ctx, lv_color_t color, lv_opa_t opa) {
     for (const Apt &ap : s_apts) {
         if (ap.large) {
             lv_draw_arc(ctx, &ring, &ap.pos, 3, 0, 360);                    // small hollow ring
-            if (ap.iata[0]) {
+            if (ap.id[0]) {
                 lv_area_t la = { (lv_coord_t)(ap.pos.x + 5), (lv_coord_t)(ap.pos.y - 7),
                                  (lv_coord_t)(ap.pos.x + 44), (lv_coord_t)(ap.pos.y + 7) };
-                lv_draw_label(ctx, &lbl, &la, ap.iata, NULL);
+                lv_draw_label(ctx, &lbl, &la, ap.id, NULL);
             }
         } else {
             lv_area_t d = { (lv_coord_t)(ap.pos.x - 1), (lv_coord_t)(ap.pos.y - 1),
@@ -69,18 +70,18 @@ void airports_draw(lv_draw_ctx_t *ctx, lv_color_t color, lv_opa_t opa) {
     }
 }
 
-bool airports_nearest_iata(double lat, double lon, float maxKm,
-                           char iata[4], float *distKm, float *bearingDeg) {
-    if (iata) iata[0] = 0;
+bool airports_nearest(double lat, double lon, float maxKm, uint8_t minClass,
+                      char id[5], float *distKm, float *bearingDeg) {
+    if (id) id[0] = 0;
     double best = maxKm;
     int bestIdx = -1;
     // cheap bbox reject before the trig-heavy haversine — lets callers scan every
-    // poll (origin hints) without burning the feed task's budget on 4.5k airports
+    // poll (origin hints) without burning the feed task's budget on 36k airports
     const double latMargin = maxKm / 111.0;
     const double cosLat    = cos(lat * M_PI / 180.0);
     const double lonMargin = latMargin / (cosLat < 0.15 ? 0.15 : cosLat);
     for (int i = 0; i < AIRPORT_NUM; ++i) {
-        if (!AIRPORT_IATA[i][0]) continue;
+        if (AIRPORT_CLASS[i] < minClass) continue;
         const double alat = AIRPORT_LAT[i] / (double)AIRPORT_SCALE;
         const double alon = AIRPORT_LON[i] / (double)AIRPORT_SCALE;
         const double dlon = fabs(alon - lon);
@@ -90,7 +91,7 @@ bool airports_nearest_iata(double lat, double lon, float maxKm,
         if (d < best) { best = d; bestIdx = i; }
     }
     if (bestIdx < 0) return false;
-    if (iata) memcpy(iata, AIRPORT_IATA[bestIdx], 4);
+    if (id) memcpy(id, AIRPORT_ID[bestIdx], 5);
     if (distKm) *distKm = (float)best;
     if (bearingDeg) {
         const double alat = AIRPORT_LAT[bestIdx] / (double)AIRPORT_SCALE;

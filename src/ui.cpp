@@ -174,7 +174,7 @@ static void refresh_card(void) {
         snprintf(s_lastRouteReq, sizeof(s_lastRouteReq), "%s", in.call);
         route_request(in.call);
     }
-    char rfrom[40], rto[40], hintIata[4];
+    char rfrom[40], rto[40], hintIata[5];
     bool rsus = false;
     // locally-inferred departure (seen on ground / climbing out near an airport):
     // the fallback when adsbdb has nothing, which is the norm for small craft
@@ -494,8 +494,9 @@ static void build_weather(void) {
         lv_obj_clear_flag(s_wxCanvas, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_wxStatus, LV_OBJ_FLAG_HIDDEN);
         lv_obj_invalidate(s_wxCanvas);
-        char iata[4]; float d = 0, b = 0;
-        if (airports_nearest_iata(rlat, rlon, 200.0f, iata, &d, &b)) {
+        char iata[5]; float d = 0, b = 0;
+        // class >= 1: a recognizable field for aviation context, not a GA strip
+        if (airports_nearest(rlat, rlon, 200.0f, 1, iata, &d, &b)) {
             char apt[64];
             snprintf(apt, sizeof(apt), "O  %s   %.0f %s %s", iata, dist_val(d), dist_unit(), cardinal(b));
             lv_label_set_text(s_wxAirport, apt);

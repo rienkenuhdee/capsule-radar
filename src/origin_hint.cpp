@@ -11,18 +11,22 @@
 
 // Tuning. A hint is only ever a fallback (shown when adsbdb has nothing), so it
 // favors "usually right" over "provably right".
-#define HINT_MAX_KM      5.0f      // aircraft must be this close to the airport
-#define HINT_MAX_ALT_FT  6000.0f   // climb-out gate: below this...
-#define HINT_MIN_FPM     300.0f    // ...and climbing at least this
+#define HINT_GROUND_KM    3.0f     // on the ground: must be AT the field
+#define HINT_CLIMB_KM     12.0f    // climbing out: it has already moved off the field
+#define HINT_MAX_ALT_FT   6000.0f  // climb-out gate: below this...
+#define HINT_MIN_FPM      300.0f   // ...and climbing at least this
+#define HINT_MIN_CLIMB_FT 200.0f   // ...or gained this much since we last saw it
+                                   // (small aircraft often omit baro_rate entirely)
 #define HINT_EXPIRE_MS   (6UL * 3600UL * 1000UL)   // forget hints after 6 h (hex reuse next day)
 #define HINT_MAX_ENTRIES 96        // bound the map (busy airspace)
 
 struct Entry {
-    char     iata[4] = {0};      // inferred departure airport ("" = none yet)
+    char     id[5] = {0};          // inferred departure airport ("" = none yet)
     bool     seenAirborne = false; // ever seen flying -> on ground later means it LANDED
     bool     seenCruise = false;   // ever seen in cruise -> low+climbing later is a go-around,
                                    // not a climb-out (don't tag the missed airport as origin)
-    uint32_t ms = 0;             // last touch, for expiry/eviction
+    float    lastAlt = NAN;        // previous altitude, to derive a climb without baro_rate
+    uint32_t ms = 0;               // last touch, for expiry/eviction
 };
 
 static std::mutex s_m;
@@ -35,6 +39,9 @@ void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs) {
         if (ac.hex.length() == 0) continue;
         Entry &e = s_map[std::string(ac.hex.c_str())];
         e.ms = nowMs;
+        const float prevAlt = e.lastAlt;
+        if (!ac.onGround && !isnan(ac.altBaro)) e.lastAlt = ac.altBaro;
+        else if (ac.onGround)                   e.lastAlt = 0.0f;
 
         // Track what we've seen this hex do, so later observations can be read
         // correctly: an aircraft we watched fly and now see on the ground LANDED
@@ -49,24 +56,31 @@ void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs) {
                 e.seenCruise = true;
         }
 
-        if (e.iata[0]) continue;   // already hinted; first observation wins
+        if (e.id[0]) continue;   // already hinted; first observation wins
 
-        // Departure evidence: first seen sitting on the ground, or climbing out
-        // low. Both must be close to an airport to count.
+        // Departure evidence: first seen sitting on the ground, or climbing out low.
+        // The climb can come from baro_rate or, when the aircraft doesn't transmit it
+        // (common on GA transponders), from the altitude gained since the last poll.
         const bool onGroundFresh = ac.onGround && !e.seenAirborne;
-        const bool climbingOut   = !ac.onGround && !e.seenCruise &&
-                                   !isnan(ac.altBaro) && ac.altBaro < HINT_MAX_ALT_FT &&
-                                   !isnan(ac.baroRate) && ac.baroRate > HINT_MIN_FPM;
+        bool climbingOut = false;
+        if (!ac.onGround && !e.seenCruise && !isnan(ac.altBaro) && ac.altBaro < HINT_MAX_ALT_FT) {
+            const bool rateClimb  = !isnan(ac.baroRate) && ac.baroRate > HINT_MIN_FPM;
+            const bool deltaClimb = !isnan(prevAlt) && (ac.altBaro - prevAlt) > HINT_MIN_CLIMB_FT;
+            climbingOut = rateClimb || deltaClimb;
+        }
         if (!onGroundFresh && !climbingOut) continue;
 
-        char iata[4];
+        char id[5];
         float dKm;
-        if (airports_nearest_iata(ac.lat, ac.lon, HINT_MAX_KM, iata, &dKm, nullptr) && iata[0]) {
-            memcpy(e.iata, iata, 4);
+        const float maxKm = onGroundFresh ? HINT_GROUND_KM : HINT_CLIMB_KM;
+        // minClass 0: small GA fields count here — they are exactly the airports
+        // the aircraft with no adsbdb route departed from.
+        if (airports_nearest(ac.lat, ac.lon, maxKm, 0, id, &dKm, nullptr) && id[0]) {
+            memcpy(e.id, id, 5);
 #if defined(ARDUINO)
-            Serial.printf("[origin] %s from %s (%.1f km, %s%.0f ft)\n",
-                          ac.hex.c_str(), iata, (double)dKm,
-                          ac.onGround ? "ground" : "", ac.onGround ? 0.0 : (double)ac.altBaro);
+            Serial.printf("[origin] %s from %s (%.1f km, %s)\n",
+                          ac.hex.c_str(), id, (double)dKm,
+                          onGroundFresh ? "ground" : "climb-out");
 #endif
         }
     }
@@ -84,12 +98,12 @@ void origin_hint_update(const std::vector<Aircraft>& acs, uint32_t nowMs) {
     }
 }
 
-bool origin_hint_get(const char *hex, char iata[4]) {
-    if (iata) iata[0] = 0;
+bool origin_hint_get(const char *hex, char id[5]) {
+    if (id) id[0] = 0;
     if (!hex || !hex[0]) return false;
     std::lock_guard<std::mutex> g(s_m);
     auto it = s_map.find(std::string(hex));
-    if (it == s_map.end() || !it->second.iata[0]) return false;
-    memcpy(iata, it->second.iata, 4);
+    if (it == s_map.end() || !it->second.id[0]) return false;
+    memcpy(id, it->second.id, 5);
     return true;
 }
