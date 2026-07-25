@@ -26,7 +26,7 @@
 static lv_obj_t *s_tv = nullptr;
 static lv_obj_t *s_tileRadar = nullptr, *s_tileList = nullptr, *s_tileStats = nullptr, *s_tileWeather = nullptr;
 static lv_obj_t *s_card = nullptr, *s_cardTitle = nullptr, *s_cardL = nullptr, *s_cardR = nullptr;
-static lv_obj_t *s_cardRoute = nullptr;
+static lv_obj_t *s_cardRoute = nullptr, *s_cardAirline = nullptr;
 static lv_obj_t *s_photo = nullptr, *s_photoCredit = nullptr;   // aircraft photo above the card
 static char s_lastRouteReq[12] = "";
 static lv_obj_t *s_hudWifi = nullptr, *s_hudCount = nullptr, *s_hudClock = nullptr, *s_hudBatt = nullptr, *s_hudDate = nullptr;
@@ -67,6 +67,9 @@ void ui_set_large_text(bool on) { s_bigText = on; }
 static const lv_font_t *F12() { return s_bigText ? &lv_font_montserrat_16 : &lv_font_montserrat_12; }
 static const lv_font_t *F14() { return s_bigText ? &lv_font_montserrat_18 : &lv_font_montserrat_14; }
 static const lv_font_t *F16() { return s_bigText ? &lv_font_montserrat_20 : &lv_font_montserrat_16; }
+// Detail-card text rows below the ALT/SPD/DIST block: airline, then route.
+static lv_coord_t CARD_ROUTE_Y() { return s_bigText ? 100 : 76; }
+static lv_coord_t CARD_LINE_H()  { return s_bigText ? 22 : 18; }
 
 static void fmt_alt(char *b, size_t n, float ft, bool gnd) {
     if (gnd)            snprintf(b, n, "GND");
@@ -174,7 +177,7 @@ static void refresh_card(void) {
         snprintf(s_lastRouteReq, sizeof(s_lastRouteReq), "%s", in.call);
         route_request(in.call);
     }
-    char rfrom[40], rto[40], hintIata[5];
+    char rfrom[40], rto[40], rairline[40] = "", hintIata[5];
     bool rsus = false;
     // locally-inferred departure (seen on ground / climbing out near an airport):
     // the fallback when adsbdb has nothing, which is the norm for small craft
@@ -184,7 +187,8 @@ static void refresh_card(void) {
         if (hint) { char rt[24]; snprintf(rt, sizeof(rt), "From %s", hintIata);
                     lv_label_set_text(s_cardRoute, rt); }
         else        lv_label_set_text(s_cardRoute, "Route -");     // no callsign -> nothing to look up
-    } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto), &rsus)) {
+    } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto), &rsus,
+                         rairline, sizeof(rairline))) {
         char rt[96];
         if (rfrom[0] && rto[0]) snprintf(rt, sizeof(rt), "%s -> %s%s", rfrom, rto, rsus ? " ?" : "");
         else if (rfrom[0])      snprintf(rt, sizeof(rt), "From %s", rfrom);   // partial route:
@@ -197,6 +201,17 @@ static void refresh_card(void) {
         lv_label_set_text(s_cardRoute, rt);
     } else {
         lv_label_set_text(s_cardRoute, "Looking up route...");     // pending: lookup in flight
+    }
+    // Operator sits above the route when known; otherwise the route takes its slot
+    // so GA aircraft (no airline) don't get a blank line.
+    if (rairline[0]) {
+        fold_ascii(rairline);
+        lv_label_set_text(s_cardAirline, rairline);
+        lv_obj_clear_flag(s_cardAirline, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_cardRoute, LV_ALIGN_TOP_LEFT, 0, CARD_ROUTE_Y() + CARD_LINE_H());
+    } else {
+        lv_obj_add_flag(s_cardAirline, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_align(s_cardRoute, LV_ALIGN_TOP_LEFT, 0, CARD_ROUTE_Y());
     }
 
     // aircraft photo (planespotters), shown above the card when one is available
@@ -602,9 +617,12 @@ static lv_obj_t *make_round_panel(lv_obj_t *parent) {
 static void build_card(void) {
     s_card = lv_obj_create(s_tileRadar);
     lv_obj_remove_style_all(s_card);
-    // large text needs a taller card (three 18px data lines + the route line below them)
-    lv_obj_set_size(s_card, s_bigText ? 316 : 300, s_bigText ? 148 : 118);
-    lv_obj_align(s_card, LV_ALIGN_CENTER, 0, s_bigText ? 56 : 66);
+    // large text needs a taller card (three 18px data lines, then the airline and
+    // route lines below them)
+    lv_obj_set_size(s_card, s_bigText ? 316 : 300, s_bigText ? 170 : 136);
+    // Offset compensates for the extra line so the card's TOP edge stays put (the
+    // photo + credit sit right above it); it grows downward, clearing the zoom button.
+    lv_obj_align(s_card, LV_ALIGN_CENTER, 0, s_bigText ? 67 : 75);
     lv_obj_set_style_bg_color(s_card, UI_PANEL, 0);
     lv_obj_set_style_bg_opa(s_card, 235, 0);
     lv_obj_set_style_radius(s_card, 14, 0);
@@ -631,10 +649,19 @@ static void build_card(void) {
     lv_obj_set_style_text_color(s_cardR, UI_SOFT, 0);
     lv_obj_align(s_cardR, LV_ALIGN_TOP_LEFT, s_bigText ? 160 : 150, s_bigText ? 30 : 26);
 
+    // Operator name, above the route. Hidden when unknown (GA traffic), in which
+    // case refresh_card slides the route line up into this slot.
+    s_cardAirline = lv_label_create(s_card);
+    lv_obj_set_style_text_font(s_cardAirline, F14(), 0);
+    lv_obj_set_style_text_color(s_cardAirline, UI_SOFT, 0);
+    lv_obj_set_width(s_cardAirline, s_bigText ? 288 : 272);
+    lv_label_set_long_mode(s_cardAirline, LV_LABEL_LONG_DOT);   // ellipsize long names
+    lv_obj_align(s_cardAirline, LV_ALIGN_TOP_LEFT, 0, CARD_ROUTE_Y());
+
     s_cardRoute = lv_label_create(s_card);
     lv_obj_set_style_text_font(s_cardRoute, F14(), 0);
     lv_obj_set_style_text_color(s_cardRoute, UI_GREEN, 0);
-    lv_obj_align(s_cardRoute, LV_ALIGN_TOP_LEFT, 0, s_bigText ? 100 : 76);
+    lv_obj_align(s_cardRoute, LV_ALIGN_TOP_LEFT, 0, CARD_ROUTE_Y());
 
     // aircraft photo + credit, floating above the card (hidden until one loads)
     s_photo = lv_canvas_create(s_tileRadar);

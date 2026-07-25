@@ -269,17 +269,19 @@ static void adsb_task(void*) {
             // feed for long; the next loop iteration polls again as soon as they return.
             char wantCall[12];
             if (route_pending(wantCall, sizeof(wantCall))) {
-                char from[40] = "", to[40] = "";
+                char from[40] = "", to[40] = "", airline[40] = "";
                 double dLat = NAN, dLon = NAN;
-                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon)) {
+                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon,
+                                    airline, sizeof(airline))) {
                     // NVS hit, no network. Re-check against the aircraft's CURRENT state:
                     // the suspect verdict is per-flight, never cached.
-                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon));
-                    Serial.printf("[route] %s (cache): '%s' -> '%s'\n", wantCall, from, to);
-                } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon)) {
-                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon));
-                    route_cache_put(wantCall, from, to, dLat, dLon);      // remember across reboots
-                    Serial.printf("[route] %s (net): '%s' -> '%s'\n", wantCall, from, to);
+                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon), airline);
+                    Serial.printf("[route] %s (cache): '%s' -> '%s' [%s]\n", wantCall, from, to, airline);
+                } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon,
+                                       airline, sizeof(airline))) {
+                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon), airline);
+                    route_cache_put(wantCall, from, to, dLat, dLon, airline);  // remember across reboots
+                    Serial.printf("[route] %s (net): '%s' -> '%s' [%s]\n", wantCall, from, to, airline);
                 } else {
                     route_store(wantCall, from, to);   // empty -> don't refetch this session
                     Serial.printf("[route] %s: no route\n", wantCall);

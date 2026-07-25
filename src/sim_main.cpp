@@ -265,9 +265,12 @@ int main(int argc, char **argv) {
         if (route_pending(wc, sizeof(wc))) {
             static const char *cities[] = { "Madrid", "London", "Paris", "Berlin",
                                             "Rome", "Lisbon", "Amsterdam", "Dublin" };
+            // every 4th mock flight has no operator, to exercise the GA layout
+            // (airline line hidden, route slides up into its slot)
+            static const char *airlines[] = { "Ryanair", "Vueling", "Iberia", "" };
             int h = 0;
             for (const char *p = wc; *p; ++p) h += (unsigned char)*p;
-            route_store(wc, cities[h % 8], cities[(h / 2 + 3) % 8]);
+            route_store(wc, cities[h % 8], cities[(h / 2 + 3) % 8], false, airlines[h % 4]);
         }
         lv_timer_handler();
 
@@ -314,7 +317,8 @@ int main(int argc, char **argv) {
             }
             radar::select(0);                            // select an aircraft so the card shows
             ui_on_data_updated();
-            { char wc[12]; if (route_pending(wc, sizeof(wc))) route_store(wc, "Madrid", "London"); }
+            { char wc[12]; if (route_pending(wc, sizeof(wc)))
+                  route_store(wc, "Madrid", "London", false, "Iberia"); }
             ui_on_data_updated();                        // pick up the mock route for the card
             int ow, oh;
             SDL_GetRendererOutputSize(s_ren, &ow, &oh);

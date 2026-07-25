@@ -9,7 +9,8 @@ bool route_pending(char *callOut, size_t n);                  // task: is a look
 // `suspect`: the claimed destination disagrees with the aircraft's observed track
 // (see route_looks_suspect in main.cpp / GitHub #7). The UI shows the route
 // de-emphasized instead of presenting it as fact.
+// `airline`: operator name, "" when unknown (GA traffic has none).
 void route_store(const char *callsign, const char *from, const char *to,
-                 bool suspect = false);
+                 bool suspect = false, const char *airline = nullptr);
 bool route_get(const char *callsign, char *from, size_t fn, char *to, size_t tn,
-               bool *suspect = nullptr);
+               bool *suspect = nullptr, char *airline = nullptr, size_t an = 0);

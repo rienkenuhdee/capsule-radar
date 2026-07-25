@@ -21,7 +21,7 @@ static void route_key(const char *callsign, char *out, size_t on) {
     out[j] = 0;
 }
 
-#define ROUTE_FMT_VER 3   // bump to invalidate cached routes when the label format changes
+#define ROUTE_FMT_VER 4   // bump to invalidate cached routes when the label format changes
 
 void route_cache_begin() {
     Preferences p;
@@ -31,9 +31,10 @@ void route_cache_begin() {
 }
 
 bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size_t tn,
-                     double *destLat, double *destLon) {
+                     double *destLat, double *destLon, char *airline, size_t an) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
+    if (an) airline[0] = 0;
     if (destLat) *destLat = NAN;
     if (destLon) *destLon = NAN;
     if (!callsign || !callsign[0]) return false;
@@ -42,12 +43,12 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
     if (!key[0]) return false;
     Preferences p;
     if (!p.begin("routes", true)) return false;
-    String v = p.getString(key, "");     // stored as "epoch|from|to|destLat|destLon"
+    String v = p.getString(key, "");     // "epoch|from|to|destLat|destLon|airline"
     p.end();
     if (v.length() == 0) return false;
-    int cut[4];                          // the 4 separators around the 5 fields
+    int cut[5];                          // the 5 separators around the 6 fields
     int pos = -1;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         pos = v.indexOf('|', pos + 1);
         if (pos < 0) return false;
         cut[i] = pos;
@@ -61,16 +62,17 @@ bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size
     snprintf(from, fn, "%s", v.substring(cut[0] + 1, cut[1]).c_str());
     snprintf(to, tn, "%s", v.substring(cut[1] + 1, cut[2]).c_str());
     const String slat = v.substring(cut[2] + 1, cut[3]);
-    const String slon = v.substring(cut[3] + 1);
+    const String slon = v.substring(cut[3] + 1, cut[4]);
     if (slat.length() && slon.length()) {
         if (destLat) *destLat = atof(slat.c_str());
         if (destLon) *destLon = atof(slon.c_str());
     }
+    if (an) snprintf(airline, an, "%s", v.substring(cut[4] + 1).c_str());
     return true;
 }
 
 void route_cache_put(const char *callsign, const char *from, const char *to,
-                     double destLat, double destLon) {
+                     double destLat, double destLon, const char *airline) {
     if (!callsign || !callsign[0]) return;
     char key[12];
     route_key(callsign, key, sizeof(key));
@@ -83,7 +85,7 @@ void route_cache_put(const char *callsign, const char *from, const char *to,
     if (!isnan(destLat) && !isnan(destLon))
         snprintf(coords, sizeof(coords), "%.4f|%.4f", destLat, destLon);
     String v = String((uint32_t)time(nullptr)) + "|" + String(from ? from : "") + "|" +
-               String(to ? to : "") + "|" + coords;
+               String(to ? to : "") + "|" + coords + "|" + String(airline ? airline : "");
     if (p.putString(key, v) > 0) p.putInt("__n", n + 1);
     p.end();
 }
@@ -106,10 +108,32 @@ static void pick_airport(JsonObjectConst ap, char *out, size_t n) {
     snprintf(out, n, "%s", s.c_str());
 }
 
+// Operator name for the card. adsbdb carries the legal company name, so trim the
+// corporate tail ("American Airlines Inc." -> "American Airlines") to fit one line.
+static void pick_airline(JsonObjectConst al, char *out, size_t n) {
+    if (n) out[0] = 0;
+    if (al.isNull()) return;
+    String s = (const char *)(al["name"] | "");
+    static const char *TAIL[] = { " Inc.", " Inc", " Ltd.", " Ltd", " LLC", " L.L.C.",
+                                  " Co.", " Corp.", " Corporation", " Company",
+                                  " AG", " S.A.", " SA", " N.V.", " NV", " PLC", " Plc",
+                                  " Pty", " GmbH", " d.o.o.", " A/S", " AB", " AS" };
+    for (const char *t : TAIL) {
+        const int len = (int)strlen(t);
+        if (s.length() > (unsigned)len && s.endsWith(t)) {
+            s.remove(s.length() - len);
+            s.trim();
+        }
+    }
+    s.trim();
+    snprintf(out, n, "%s", s.c_str());
+}
+
 bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t tn,
-                 double *destLat, double *destLon) {
+                 double *destLat, double *destLon, char *airline, size_t an) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
+    if (an) airline[0] = 0;
     if (destLat) *destLat = NAN;
     if (destLon) *destLon = NAN;
     if (!callsign || !callsign[0] || WiFi.status() != WL_CONNECTED) return false;
@@ -138,6 +162,7 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     if (code != 200) { http.end(); return false; }
 
     JsonDocument filter;
+    filter["response"]["flightroute"]["airline"]["name"] = true;   // operator, for the card
     filter["response"]["flightroute"]["origin"]["municipality"] = true;
     filter["response"]["flightroute"]["origin"]["iata_code"] = true;
     filter["response"]["flightroute"]["origin"]["name"] = true;
@@ -163,5 +188,6 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
         if (destLat) *destLat = dst["latitude"].as<double>();
         if (destLon) *destLon = dst["longitude"].as<double>();
     }
-    return (from[0] || to[0]);
+    if (an) pick_airline(fr["airline"].as<JsonObjectConst>(), airline, an);
+    return (from[0] || to[0] || (an && airline[0]));
 }
