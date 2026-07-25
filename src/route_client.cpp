@@ -8,6 +8,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <string.h>
+#include <math.h>   // NAN: "no destination coords" sentinel
 #include <time.h>   // route-cache TTL
 
 #define ROUTE_CACHE_MAX 200   // wrap the cache before it can crowd NVS
@@ -20,7 +21,7 @@ static void route_key(const char *callsign, char *out, size_t on) {
     out[j] = 0;
 }
 
-#define ROUTE_FMT_VER 2   // bump to invalidate cached routes when the label format changes
+#define ROUTE_FMT_VER 3   // bump to invalidate cached routes when the label format changes
 
 void route_cache_begin() {
     Preferences p;
@@ -29,35 +30,47 @@ void route_cache_begin() {
     p.end();
 }
 
-bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
+bool route_cache_get(const char *callsign, char *from, size_t fn, char *to, size_t tn,
+                     double *destLat, double *destLon) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
+    if (destLat) *destLat = NAN;
+    if (destLon) *destLon = NAN;
     if (!callsign || !callsign[0]) return false;
     char key[12];
     route_key(callsign, key, sizeof(key));
     if (!key[0]) return false;
     Preferences p;
     if (!p.begin("routes", true)) return false;
-    String v = p.getString(key, "");     // stored as "epoch|from|to"
+    String v = p.getString(key, "");     // stored as "epoch|from|to|destLat|destLon"
     p.end();
     if (v.length() == 0) return false;
-    const int b1 = v.indexOf('|');
-    if (b1 < 0) return false;
-    const uint32_t ts = (uint32_t)v.substring(0, b1).toInt();
-    const String rest = v.substring(b1 + 1);
-    const int b2 = rest.indexOf('|');
-    if (b2 < 0) return false;
+    int cut[4];                          // the 4 separators around the 5 fields
+    int pos = -1;
+    for (int i = 0; i < 4; ++i) {
+        pos = v.indexOf('|', pos + 1);
+        if (pos < 0) return false;
+        cut[i] = pos;
+    }
+    const uint32_t ts = (uint32_t)v.substring(0, cut[0]).toInt();
     const uint32_t now = (uint32_t)time(nullptr);    // expire stale routes (reused callsigns)
     if (now > 1700000000UL && ts > 1700000000UL && (now - ts) > 7200UL) return false;  // 2 h TTL
     // Was 24h: many carriers (esp. low-cost/charter) reuse the same callsign for
     // different city pairs across a day, so a day-old cached route can point at a
     // completely different flight than the one currently being tracked (GitHub #7).
-    snprintf(from, fn, "%s", rest.substring(0, b2).c_str());
-    snprintf(to, tn, "%s", rest.substring(b2 + 1).c_str());
+    snprintf(from, fn, "%s", v.substring(cut[0] + 1, cut[1]).c_str());
+    snprintf(to, tn, "%s", v.substring(cut[1] + 1, cut[2]).c_str());
+    const String slat = v.substring(cut[2] + 1, cut[3]);
+    const String slon = v.substring(cut[3] + 1);
+    if (slat.length() && slon.length()) {
+        if (destLat) *destLat = atof(slat.c_str());
+        if (destLon) *destLon = atof(slon.c_str());
+    }
     return true;
 }
 
-void route_cache_put(const char *callsign, const char *from, const char *to) {
+void route_cache_put(const char *callsign, const char *from, const char *to,
+                     double destLat, double destLon) {
     if (!callsign || !callsign[0]) return;
     char key[12];
     route_key(callsign, key, sizeof(key));
@@ -66,7 +79,11 @@ void route_cache_put(const char *callsign, const char *from, const char *to) {
     if (!p.begin("routes", false)) return;
     int n = p.getInt("__n", 0);
     if (n >= ROUTE_CACHE_MAX) { p.clear(); n = 0; }   // wrap to bound NVS usage
-    String v = String((uint32_t)time(nullptr)) + "|" + String(from ? from : "") + "|" + String(to ? to : "");
+    char coords[32] = "|";               // "|lat|lon", empty fields when unknown
+    if (!isnan(destLat) && !isnan(destLon))
+        snprintf(coords, sizeof(coords), "%.4f|%.4f", destLat, destLon);
+    String v = String((uint32_t)time(nullptr)) + "|" + String(from ? from : "") + "|" +
+               String(to ? to : "") + "|" + coords;
     if (p.putString(key, v) > 0) p.putInt("__n", n + 1);
     p.end();
 }
@@ -89,9 +106,12 @@ static void pick_airport(JsonObjectConst ap, char *out, size_t n) {
     snprintf(out, n, "%s", s.c_str());
 }
 
-bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
+bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t tn,
+                 double *destLat, double *destLon) {
     if (fn) from[0] = 0;
     if (tn) to[0] = 0;
+    if (destLat) *destLat = NAN;
+    if (destLon) *destLon = NAN;
     if (!callsign || !callsign[0] || WiFi.status() != WL_CONNECTED) return false;
 
     // strip spaces from the callsign
@@ -124,6 +144,8 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
     filter["response"]["flightroute"]["destination"]["municipality"] = true;
     filter["response"]["flightroute"]["destination"]["iata_code"] = true;
     filter["response"]["flightroute"]["destination"]["name"] = true;
+    filter["response"]["flightroute"]["destination"]["latitude"] = true;   // for the track
+    filter["response"]["flightroute"]["destination"]["longitude"] = true;  // sanity check (#7)
 
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, http.getStream(),
@@ -136,5 +158,10 @@ bool route_fetch(const char *callsign, char *from, size_t fn, char *to, size_t t
 
     pick_airport(fr["origin"].as<JsonObjectConst>(), from, fn);
     pick_airport(fr["destination"].as<JsonObjectConst>(), to, tn);
+    JsonObjectConst dst = fr["destination"].as<JsonObjectConst>();
+    if (!dst.isNull() && dst["latitude"].is<double>() && dst["longitude"].is<double>()) {
+        if (destLat) *destLat = dst["latitude"].as<double>();
+        if (destLon) *destLon = dst["longitude"].as<double>();
+    }
     return (from[0] || to[0]);
 }

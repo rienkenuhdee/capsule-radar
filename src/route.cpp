@@ -10,6 +10,7 @@ static char s_want[12]     = "";   // callsign the UI asked about
 static char s_doneCall[12] = "";   // callsign the stored result belongs to
 static char s_from[40]     = "";
 static char s_to[40]       = "";
+static bool s_suspect      = false;   // route disagrees with the observed track (#7)
 
 void route_request(const char *callsign) {
     std::lock_guard<std::mutex> g(s_m);
@@ -59,18 +60,21 @@ static void ascii_fold(const char *in, char *out, size_t n) {
     out[o] = 0;
 }
 
-void route_store(const char *callsign, const char *from, const char *to) {
+void route_store(const char *callsign, const char *from, const char *to, bool suspect) {
     std::lock_guard<std::mutex> g(s_m);
     snprintf(s_doneCall, sizeof(s_doneCall), "%s", callsign ? callsign : "");
     ascii_fold(from, s_from, sizeof(s_from));
     ascii_fold(to,   s_to,   sizeof(s_to));
+    s_suspect = suspect;
 }
 
-bool route_get(const char *callsign, char *from, size_t fn, char *to, size_t tn) {
+bool route_get(const char *callsign, char *from, size_t fn, char *to, size_t tn,
+               bool *suspect) {
     std::lock_guard<std::mutex> g(s_m);
     if (callsign && s_doneCall[0] && strcmp(callsign, s_doneCall) == 0) {
         snprintf(from, fn, "%s", s_from);
         snprintf(to, tn, "%s", s_to);
+        if (suspect) *suspect = s_suspect;
         return true;
     }
     return false;

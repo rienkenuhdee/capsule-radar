@@ -174,12 +174,18 @@ static void refresh_card(void) {
         route_request(in.call);
     }
     char rfrom[40], rto[40];
+    bool rsus = false;
+    lv_obj_set_style_text_color(s_cardRoute, UI_GREEN, 0);         // default; overridden below
     if (!in.call[0]) {
         lv_label_set_text(s_cardRoute, "Route -");                 // no callsign -> nothing to look up
-    } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto))) {
+    } else if (route_get(in.call, rfrom, sizeof(rfrom), rto, sizeof(rto), &rsus)) {
         char rt[96];
-        if (rfrom[0] || rto[0]) snprintf(rt, sizeof(rt), "%s -> %s", rfrom[0] ? rfrom : "?", rto[0] ? rto : "?");
+        if (rfrom[0] && rto[0]) snprintf(rt, sizeof(rt), "%s -> %s%s", rfrom, rto, rsus ? " ?" : "");
+        else if (rfrom[0])      snprintf(rt, sizeof(rt), "From %s", rfrom);   // partial route:
+        else if (rto[0])        snprintf(rt, sizeof(rt), "To %s", rto);       // show what's known
         else                    snprintf(rt, sizeof(rt), "Route unavailable");
+        if (rsus)               // claimed destination disagrees with the observed track (#7):
+            lv_obj_set_style_text_color(s_cardRoute, UI_DIM, 0);   // show it, but not as fact
         fold_ascii(rt);
         lv_label_set_text(s_cardRoute, rt);
     } else {

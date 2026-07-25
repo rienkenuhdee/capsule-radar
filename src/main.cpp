@@ -102,6 +102,48 @@ static const struct { const char *label; const char *tz; int offMin; int dst; } 
 };
 static const int TZOPTS_N = sizeof(TZOPTS) / sizeof(TZOPTS[0]);
 
+// Sanity-check a claimed route against the aircraft's observed state (GitHub #7).
+// adsbdb keys routes on callsign alone and sometimes has the wrong city pair stored;
+// an aircraft tracking away from its claimed destination gives that away. Only flag
+// clear disagreement: destination far away (rules out terminal-area maneuvering and
+// holding patterns) AND the observed track pointing >100° off the bearing to it
+// (en-route doglegs rarely exceed ~40°). Conservative on purpose — when in doubt,
+// show the route as-is.
+static bool route_looks_suspect(const char *callsign, double destLat, double destLon) {
+    if (isnan(destLat) || isnan(destLon)) return false;
+    // find the aircraft by callsign (space-stripped, like the route lookup key)
+    char want[12];
+    { size_t j = 0;
+      for (const char *p = callsign; *p && j < sizeof(want) - 1; ++p)
+          if (*p != ' ') want[j++] = *p;
+      want[j] = 0; }
+    double lat = 0, lon = 0; float track = NAN, gs = NAN; bool found = false, ground = false;
+    if (xSemaphoreTake(g_ac_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        for (const Aircraft &ac : g_aircraft) {
+            char cs[12]; size_t j = 0;
+            for (const char *p = ac.flight.c_str(); *p && j < sizeof(cs) - 1; ++p)
+                if (*p != ' ') cs[j++] = *p;
+            cs[j] = 0;
+            if (strcmp(cs, want) == 0) {
+                lat = ac.lat; lon = ac.lon; track = ac.track; gs = ac.gs;
+                ground = ac.onGround; found = true;
+                break;
+            }
+        }
+        xSemaphoreGive(g_ac_mutex);
+    }
+    if (!found || ground || isnan(track) || isnan(gs) || gs < 60.0f) return false;
+    const double distKm = geo::haversineKm(lat, lon, destLat, destLon);
+    if (distKm < 100.0) return false;                 // close in, bearings swing legitimately
+    const double brg = geo::bearingDeg(lat, lon, destLat, destLon);
+    double diff = fabs(brg - (double)track);
+    if (diff > 180.0) diff = 360.0 - diff;
+    if (diff <= 100.0) return false;
+    Serial.printf("[route] %s suspect: trk %.0f vs brg %.0f to dest, %.0f km away\n",
+                  want, (double)track, brg, distKm);
+    return true;
+}
+
 // ---- networking task (core 0): fetch + parse, never touches the display ----
 static void adsb_task(void*) {
     std::vector<Aircraft> fresh;
@@ -224,12 +266,15 @@ static void adsb_task(void*) {
             char wantCall[12];
             if (route_pending(wantCall, sizeof(wantCall))) {
                 char from[40] = "", to[40] = "";
-                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to))) {
-                    route_store(wantCall, from, to);                       // NVS hit, no network
+                double dLat = NAN, dLon = NAN;
+                if (route_cache_get(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon)) {
+                    // NVS hit, no network. Re-check against the aircraft's CURRENT state:
+                    // the suspect verdict is per-flight, never cached.
+                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon));
                     Serial.printf("[route] %s (cache): '%s' -> '%s'\n", wantCall, from, to);
-                } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to))) {
-                    route_store(wantCall, from, to);
-                    route_cache_put(wantCall, from, to);                  // remember across reboots
+                } else if (route_fetch(wantCall, from, sizeof(from), to, sizeof(to), &dLat, &dLon)) {
+                    route_store(wantCall, from, to, route_looks_suspect(wantCall, dLat, dLon));
+                    route_cache_put(wantCall, from, to, dLat, dLon);      // remember across reboots
                     Serial.printf("[route] %s (net): '%s' -> '%s'\n", wantCall, from, to);
                 } else {
                     route_store(wantCall, from, to);   // empty -> don't refetch this session
