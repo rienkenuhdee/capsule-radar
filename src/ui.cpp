@@ -861,11 +861,13 @@ void ui_create(void) {
         lv_obj_clear_flag(s_hudBars[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     }
 
-    // Mute toggle, leftmost in the HUD row. A plain symbol keeps it visually part of
-    // the HUD; the enlarged click area makes it a comfortable target anyway.
+    // Mute toggle, at the right end of the HUD row (the left end is the WiFi meter).
+    // A plain symbol keeps it visually part of the HUD; the enlarged click area
+    // makes it a comfortable target anyway. +126 keeps the glyph's right edge inside
+    // the round screen (|dx| < 144 at this y) in both font sizes.
     s_hudMute = lv_label_create(s_tileRadar);
     lv_obj_set_style_text_font(s_hudMute, F14(), 0);
-    lv_obj_align(s_hudMute, LV_ALIGN_TOP_MID, -95, 50);
+    lv_obj_align(s_hudMute, LV_ALIGN_TOP_MID, 126, 50);
     lv_obj_add_flag(s_hudMute, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_hudMute, 16);
     lv_obj_clear_flag(s_hudMute, LV_OBJ_FLAG_SCROLL_CHAIN);   // tapping must not swipe the tileview
@@ -888,13 +890,13 @@ void ui_create(void) {
     lv_obj_set_style_text_font(s_hudClock, F14(), 0);
     lv_obj_set_style_text_color(s_hudClock, UI_INK, 0);
     lv_label_set_text(s_hudClock, "--:--");
-    lv_obj_align(s_hudClock, LV_ALIGN_TOP_MID, 30, 50);
+    lv_obj_align(s_hudClock, LV_ALIGN_TOP_MID, s_bigText ? 20 : 30, 50);   // room for mute at the right
 
     s_hudBatt = lv_label_create(s_tileRadar);
     lv_obj_set_style_text_font(s_hudBatt, F14(), 0);
     lv_obj_set_style_text_color(s_hudBatt, UI_INK, 0);
     lv_label_set_text(s_hudBatt, "");
-    lv_obj_align(s_hudBatt, LV_ALIGN_TOP_MID, 92, 50);
+    lv_obj_align(s_hudBatt, LV_ALIGN_TOP_MID, 80, 50);   // shifted in to clear the mute icon
 
     s_hudDate = lv_label_create(s_tileRadar);
     lv_obj_set_style_text_font(s_hudDate, F12(), 0);
